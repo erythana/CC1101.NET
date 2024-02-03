@@ -41,26 +41,32 @@ namespace CC1101.NET
         }
 
         #endregion
-
-        #region interface implementation
-
         #region ICC01Init implementation
         
         /// <summary>
         /// Creates the CC1101 Device - Disposable!
         /// </summary>
-        /// <param name="transmitterAddress"></param>
+        /// <param name="transmitterAddress">The address of this device. This can be changed later</param>
         /// <returns></returns>
         public ICC1101 Initialize(byte transmitterAddress)
         {
-            _cc1101 = new Internal.CC1101(_configuration, _wakeOnRadio, _gpioController, _powerstate, _rxTxStateController, _spiCommunication)
-            {
-                DeviceAddress = transmitterAddress
-            };
+            _cc1101 = Internal.CC1101.Create(_configuration, _wakeOnRadio, _gpioController, _powerstate, _rxTxStateController, _spiCommunication);
+            _cc1101.DeviceAddress = transmitterAddress;
             return _cc1101;
         }
 
-        #endregion
+        /// <summary>
+        /// Creates the CC1101 Device - Disposable!
+        /// </summary>
+        /// <param name="transmitterAddress">The address of this device. This can be changed later</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public async Task<ICC1101> InitializeAsync(byte transmitterAddress, CancellationToken cancellationToken)
+        {
+            _cc1101 = await Internal.CC1101.CreateAsync(_configuration, _wakeOnRadio, _gpioController, _powerstate, _rxTxStateController, _spiCommunication, cancellationToken);
+            _cc1101.DeviceAddress = transmitterAddress;
+            return _cc1101;
+        }
 
         #endregion
     }

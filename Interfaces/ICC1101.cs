@@ -1,8 +1,9 @@
 using CC1101.NET.Enums;
+using CC1101.NET.Internal;
 
 namespace CC1101.NET.Interfaces;
 
-public interface ICC1101
+public interface ICC1101 : IDisposable
 {
     #region properties
     
@@ -17,14 +18,14 @@ public interface ICC1101
 
     #region Methods
 
-
     public bool PacketAvailable();
     public void SendAcknowledge(byte receiverAddress);
     public bool CheckAcknowledge(byte receiverAddress, byte[] potentialAckPayload, out RFPacket? packet);
     public bool WaitForPacket(int milliseconds);
     public void SetPowerAmplifierTable(byte[] powerAmplifierTable);
     public void SetPreambleLength(int length);
-    public void SetDatarate(byte mdmcfg4Value, byte mdmcfg3Value, byte deviation);
+    public void SetDatarate(int baudRate, int crystalFrequency);
+    public void SetDeviation(int deviationHz, int crystalFrequency);
     public void SetSyncMode(SyncMode syncMode);
     public void SetFEC(bool activateFEC);
     public void SetDataWhitening(bool activateWhitening);
@@ -33,10 +34,12 @@ public interface ICC1101
     public byte LqiConvert(sbyte qualityIndicatorHex);
     public byte CheckCRC(byte checksumHex);
     public void SetModulationType(ModulationType modulationType);
-    public bool SendPacket(byte receiver, byte[] transmitPayload, int txRetries, out RFPacket? ackPacket);
+    public CommunicationResult<RFPacket> SendPacket(byte receiver, byte[] transmitPayload, int txRetries);
+    public Task<CommunicationResult<RFPacket>> SendPacketAsync(byte receiver, byte[] transmitPayload, int txRetries, CancellationToken cancellationToken = default);
     public void TxPayloadBurst(byte receiverAddress, byte[] transmitPayload);
-    public bool TryRxPayloadBurst(out byte[] buffer);
-    public bool GetPayload(out RFPacket? packet);
+    public CommunicationResult<byte[]> TryRxPayloadBurst();
+    public Task<CommunicationResult<byte[]>> TryRxPayloadBurst(CancellationToken cancellationToken = default);
+    public CommunicationResult<RFPacket> GetPayload();
 
     #endregion
 

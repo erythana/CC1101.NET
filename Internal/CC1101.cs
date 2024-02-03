@@ -6,42 +6,53 @@ using CC1101.NET.Internal.Enums;
 
 namespace CC1101.NET.Internal
 {
-    internal class CC1101 : ICC1101, IDisposable //Todo: CC1101 for dispose or from controller?
+    internal class CC1101 : ICC1101
     {
         #region member fields
-        
-        private readonly ConnectionConfiguration _connectionConfiguration;
-        private readonly GpioController _gpioController;
-        private readonly RxTxStateController _rxTxStateController;
-        private readonly SPICommunication _spiCommunication;
+
+        private ConnectionConfiguration _connectionConfiguration;
+        private GpioController _gpioController;
+        private RxTxStateController _rxTxStateController;
+        private SPICommunication _spiCommunication;
         private byte _transmissionAddress;
         private int _channel;
         private Mode _mode;
         private Frequency _frequency;
         private bool _alreadyDisposed;
-        
+
         #endregion
 
         #region constructor
 
-        internal CC1101(ConnectionConfiguration connectionConfiguration, IWakeOnRadio wakeOnRadio, GpioController gpioController, IPowerstate powerstate, RxTxStateController rxTxStateController,
+        private CC1101(ConnectionConfiguration connectionConfiguration, IWakeOnRadio wakeOnRadio, GpioController gpioController, IPowerstate powerstate, RxTxStateController rxTxStateController,
             SPICommunication spiCommunication)
         {
-            while (!Debugger.IsAttached)
-            {
-                
-            }
-            
-            
             _connectionConfiguration = connectionConfiguration;
             _gpioController = gpioController;
             _rxTxStateController = rxTxStateController;
             _spiCommunication = spiCommunication;
             Powerstate = powerstate;
             WakeOnRadio = wakeOnRadio;
-
-            Initialize();
         }
+
+        public static ICC1101 Create(ConnectionConfiguration connectionConfiguration, IWakeOnRadio wakeOnRadio, GpioController gpioController, IPowerstate powerstate, RxTxStateController rxTxStateController,
+            SPICommunication spiCommunication)
+        {
+            var cc1101 = new CC1101(connectionConfiguration, wakeOnRadio, gpioController, powerstate, rxTxStateController, spiCommunication);
+            cc1101.Initialize();
+
+            return cc1101;
+        }
+
+        public async static Task<ICC1101> CreateAsync(ConnectionConfiguration connectionConfiguration, IWakeOnRadio wakeOnRadio, GpioController gpioController, IPowerstate powerstate,
+            RxTxStateController rxTxStateController, SPICommunication spiCommunication, CancellationToken cancellationToken)
+        {
+            var cc1101 = new CC1101(connectionConfiguration, wakeOnRadio, gpioController, powerstate, rxTxStateController, spiCommunication);
+            await cc1101.InitializeAsync(cancellationToken);
+
+            return cc1101;
+        }
+
 
         private void Initialize()
         {
@@ -52,6 +63,24 @@ namespace CC1101.NET.Internal
             Thread.Sleep(50); // 
             _spiCommunication.WriteStrobe(CommandStrobe.SFRX);
             Thread.Sleep(50);
+
+            Mode = Mode.GFSK__100kb;
+            Frequency = Frequency.Frequency868;
+            Channel = 0;
+            Powerstate.SetOutputPower(OutputPower.MODERATE);
+            DeviceAddress = 0x0F; //some 'random' initialization activateFEC
+            _rxTxStateController.Receive();
+        }
+
+        private async Task InitializeAsync(CancellationToken cancellationToken)
+        {
+            OpenGpioPins(_gpioController, _connectionConfiguration);
+
+            Powerstate.Reset();
+            _spiCommunication.WriteStrobe(CommandStrobe.SFTX);
+            await Task.Delay(50, cancellationToken);
+            _spiCommunication.WriteStrobe(CommandStrobe.SFRX);
+            await Task.Delay(50, cancellationToken);
 
             Mode = Mode.GFSK__100kb;
             Frequency = Frequency.Frequency868;
@@ -108,9 +137,9 @@ namespace CC1101.NET.Internal
             }
         }
 
-        public IPowerstate Powerstate { get; }
+        public IPowerstate Powerstate { get; private set; }
 
-        public IWakeOnRadio WakeOnRadio { get; }
+        public IWakeOnRadio WakeOnRadio { get; private set; }
 
         public void SendAcknowledge(byte receiverAddress)
         {
@@ -126,7 +155,7 @@ namespace CC1101.NET.Internal
         public bool CheckAcknowledge(byte receiverAddress, byte[] potentialAckPayload, out RFPacket? packet)
         {
             packet = null;
-            
+
             if (potentialAckPayload.Length == 0x05 &&
                 (potentialAckPayload[1] == DeviceAddress || potentialAckPayload[1] == (byte)DeviceRegister.BROADCAST_ADDRESS) &&
                 potentialAckPayload[2] == receiverAddress &&
@@ -138,8 +167,8 @@ namespace CC1101.NET.Internal
                 }
 
                 var packetLength = potentialAckPayload[0];
-                var rssiDbm = ReceiverStrengthToDBM(potentialAckPayload[packetLength+1]);
-                var lqi = LqiConvert((sbyte)potentialAckPayload[packetLength+2]);
+                var rssiDbm = ReceiverStrengthToDBM(potentialAckPayload[packetLength + 1]);
+                var lqi = LqiConvert((sbyte)potentialAckPayload[packetLength + 2]);
                 var crc = CheckCRC(lqi);
 
                 packet = new RFPacket(receiverAddress, rssiDbm, lqi, crc, potentialAckPayload);
@@ -165,12 +194,37 @@ namespace CC1101.NET.Internal
             return true;
         }
 
+        /// <summary>
+        /// Listens for packages for the specified time (in milliseconds)
+        /// </summary>
+        /// <param name="milliseconds">The time to listen for a package to receive</param>
+        /// <returns></returns>
         public bool WaitForPacket(int milliseconds)
         {
             var stopwatch = Stopwatch.StartNew();
             while (stopwatch.ElapsedMilliseconds < milliseconds)
                 if (PacketAvailable())
                     return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Listens for packages for the specified time (in milliseconds)
+        /// </summary>
+        /// <param name="milliseconds">The time to listen for a package to receive</param>
+        /// <param name="cancellationToken">The cancellationToken to cancel the Task before the time elapses</param>
+        /// <returns></returns>
+        public async Task<bool> WaitForPacketAsync(int milliseconds, CancellationToken cancellationToken = default)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            while (stopwatch.ElapsedMilliseconds < milliseconds)
+            {
+                if (PacketAvailable())
+                    return true;
+
+                await Task.Delay(5, cancellationToken);
+            }
+
             return false;
         }
 
@@ -185,11 +239,56 @@ namespace CC1101.NET.Internal
             _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG1, data);
         }
 
-        public void SetDatarate(byte mdmcfg4Value, byte mdmcfg3Value, byte deviation)
+        /// <summary>
+        /// Sets the baudrate, the correct crystal frequency is required
+        /// Requires also that the correct deviation is set via SetDeviation(deviation, crystal)
+        /// </summary>
+        /// <param name="baudRate">The Baud-Rate - must be between 600 and 500000</param>
+        /// <param name="crystalFrequency">Crystal frequency in Hz</param>
+        public void SetDatarate(int baudRate, int crystalFrequency)
         {
-            _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG4, mdmcfg4Value);
-            _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG3, mdmcfg3Value);
-            _spiCommunication.WriteRegister((byte)DeviceRegister.DEVIATN, deviation);
+            if (baudRate < 600 || baudRate > 500000)
+                return;
+
+            var mdmcfg4RegisterValue = _spiCommunication.ReadRegister((byte)DeviceRegister.MDMCFG4);
+            var rbw = (byte)(mdmcfg4RegisterValue & 0b11110000);
+
+            var dataRateExponent = (byte)Math.Log(baudRate * Math.Pow(2, 20) / crystalFrequency, 2); // log2 calculation
+            var dataRateMantissa = (byte)(baudRate * Math.Pow(2, 28) / (crystalFrequency * Math.Pow(2, dataRateExponent)) - 256);
+            mdmcfg4RegisterValue = (byte)(rbw | dataRateExponent & 0b00001111); // combining rbw and dataRateExponent
+
+            _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG4, mdmcfg4RegisterValue);
+            _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG3, dataRateMantissa);
+        }
+
+        /// <summary>
+        /// Sets the deviation
+        /// </summary>
+        /// <param name="deviationHz">The deviation in Hz</param>
+        /// <param name="crystalFrequency">Crystal frequency in Hz</param>
+        public void SetDeviation(int deviationHz, int crystalFrequency)
+        {
+            var deviationExponent = 0;
+            var deviationMantissa = 0;
+            var closest = int.MaxValue;
+            //calculate the best fitting/closest deviation for the 
+            for (byte trialDeviationExponent = 0; trialDeviationExponent < 8; trialDeviationExponent++)
+            {
+                for (byte trialDeviationMantissa = 0; trialDeviationMantissa < 8; trialDeviationMantissa++)
+                {
+                    var calculatedDeviation = crystalFrequency / Math.Pow(2, 17) * (8 + trialDeviationMantissa) * Math.Pow(2, trialDeviationExponent);
+                    var diff = Math.Abs(deviationHz - (int)calculatedDeviation);
+                    if (diff >= closest)
+                        continue;
+
+                    closest = diff;
+                    deviationMantissa = trialDeviationMantissa;
+                    deviationExponent = trialDeviationExponent;
+                }
+            }
+
+            var newDeviation = (byte)(deviationExponent << 4 | deviationMantissa);
+            _spiCommunication.WriteRegister((byte)DeviceRegister.DEVIATN, newDeviation);
         }
 
         public void SetSyncMode(SyncMode syncMode)
@@ -249,6 +348,7 @@ namespace CC1101.NET.Internal
 
         /// <summary>
         /// Get RF Quality Indicator
+        /// The Link Quality Indicator is a metric of the current quality of the received signal.
         /// </summary>
         /// <param name="qualityIndicatorHex"></param>
         /// <returns></returns>
@@ -268,16 +368,21 @@ namespace CC1101.NET.Internal
             _spiCommunication.WriteRegister((byte)DeviceRegister.MDMCFG2, data);
         }
 
-        public bool SendPacket(byte receiver, byte[] transmitPayload, int txRetries, out RFPacket? ackPacket)
+        /// <summary>
+        /// Tries to send a payload to the specified receiver
+        /// </summary>
+        /// <param name="receiver">The receiver address. 0x00 to broadcast</param>
+        /// <param name="transmitPayload">The payload to transmit</param>
+        /// <param name="txRetries">The number of retries</param>
+        /// <param name="ackPacket">When successfully sent the packet, the receiver might return an ACK</param>
+        /// <returns></returns>
+        public CommunicationResult<RFPacket> SendPacket(byte receiver, byte[] transmitPayload, int txRetries)
         {
-            ackPacket = null;
+            var result = new CommunicationResult<RFPacket>();
             var txRetriesCount = 0;
 
             if (transmitPayload.Length > (int)DeviceRegister.FIFOBUFFER - 1)
-            {
-                //printf("ERROR: packet size overflow\r\n");
-                return false;
-            }
+                return result;
 
             do //sent packet out with retries
             {
@@ -289,7 +394,8 @@ namespace CC1101.NET.Internal
                 if (receiver == (byte)DeviceRegister.BROADCAST_ADDRESS)
                 {
                     //no wait acknowledge if sent to broadcast address or tx_retries = 0
-                    return true; //successful sent to BROADCAST_ADDRESS
+                    result.Success = true;
+                    return result; //successful sent to BROADCAST_ADDRESS, no ack packet
                 }
 
                 var stopwatch = Stopwatch.StartNew();
@@ -297,19 +403,71 @@ namespace CC1101.NET.Internal
                 {
                     if (PacketAvailable()) //if RF packet received check packet ack
                     {
-                        TryRxPayloadBurst(out var receiveBuffer); //pktlen_ack returned        //reads packet in buffer
-                        CheckAcknowledge(receiver, receiveBuffer, out var packet); //check if received message is an acknowledge from client
-                        ackPacket = packet;
-                        return true; //packet successfully sent
+                        var receiveBuffer = TryRxPayloadBurst(); //pktlen_ack returned        //reads packet in buffer
+                        CheckAcknowledge(receiver, receiveBuffer.Value, out var packet); //check if received message is an acknowledge from client
+                        result.Success = true;
+                        result.Value = packet;
                     }
 
-                    Thread.Sleep(1); //delay to give receiver time
+                    Thread.Sleep(5); //delay to give receiver time
                 }
 
                 txRetriesCount++; //increase tx retry counter
             } while (txRetriesCount <= txRetries); //while count of retries is reaches
 
-            return false; //sent failed. too many retries
+            return result; //sent failed. too many retries
+        }
+
+        /// <summary>
+        /// Tries to send a payload to the specified receiver
+        /// </summary>
+        /// <param name="receiver">The receiver address. 0x00 to broadcast</param>
+        /// <param name="transmitPayload">The payload to transmit</param>
+        /// <param name="txRetries">The number of retries</param>
+        /// <param name="ackPacket">When successfully sent the packet, the receiver might return an ACK</param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
+        public async Task<CommunicationResult<RFPacket>> SendPacketAsync(byte receiver, byte[] transmitPayload, int txRetries, CancellationToken cancellationToken = default)
+        {
+            var result = new CommunicationResult<RFPacket>();
+
+            if (transmitPayload.Length > (int)DeviceRegister.FIFOBUFFER - 1)
+                return result;
+
+            var txRetriesCount = 0;
+            do //sent packet out with retries
+            {
+                TxPayloadBurst(receiver, transmitPayload);
+
+                _rxTxStateController.Transmit();
+                _rxTxStateController.Receive();
+
+                if (receiver == (byte)DeviceRegister.BROADCAST_ADDRESS)
+                {
+                    //no wait acknowledge if sent to broadcast address or tx_retries = 0
+                    result.Success = true;
+                    return result;
+                }
+
+                var stopwatch = Stopwatch.StartNew();
+                while (stopwatch.ElapsedMilliseconds < (int)DeviceRegister.ACK_TIMEOUT) //wait for an acknowledge
+                {
+                    if (PacketAvailable()) //if RF packet received check packet ack
+                    {
+                        var receiveBuffer = await TryRxPayloadBurst(cancellationToken); //pktlen_ack returned        //reads packet in buffer
+                        CheckAcknowledge(receiver, receiveBuffer.Value, out var packet); //check if received message is an acknowledge from client
+                        result.Success = true;
+                        result.Value = packet;
+                        return result; //packet successfully sent
+                    }
+
+                    await Task.Delay(5, cancellationToken); //delay to give receiver time
+                }
+
+                txRetriesCount++; //increase tx retry counter
+            } while (txRetriesCount <= txRetries); //while count of retries is reaches
+
+            return result;
         }
 
         public void TxPayloadBurst(byte receiverAddress, byte[] transmitPayload)
@@ -324,43 +482,69 @@ namespace CC1101.NET.Internal
             _spiCommunication.WriteBurst((byte)DeviceRegister.TXFIFO_BURST, transmitPayload); //writes TX_Buffer +1 because of pktlen must be also transfered
         }
 
-        public bool TryRxPayloadBurst(out byte[] buffer)
+        public CommunicationResult<byte[]> TryRxPayloadBurst()
         {
-            buffer = Array.Empty<byte>();
+            var result = new CommunicationResult<byte[]>();
+            var rxFifoByteCount = _spiCommunication.ReadRegister((byte)DeviceRegister.RXBYTES); //reads the number of bytes in RXFIFO
+
+            if ((rxFifoByteCount & 0x7F) != 0 && (rxFifoByteCount & 0x80) == 0) //if bytes in buffer and no RX Overflow
+            {
+                var buffer = _spiCommunication.ReadBurst((byte)DeviceRegister.RXFIFO_BURST, rxFifoByteCount);
+                result.Success = true;
+                result.Value = buffer;
+                return result;
+            }
+
+            Powerstate.Idle();
+            _spiCommunication.WriteStrobe(CommandStrobe.SFRX);
+            Thread.Sleep(50);
+            _rxTxStateController.Receive();
+            return result;
+        }
+
+        public async Task<CommunicationResult<byte[]>> TryRxPayloadBurst(CancellationToken cancellationToken = default)
+        {
+            var result = new CommunicationResult<byte[]>();
+
+            var buffer = Array.Empty<byte>();
             var rxFifoByteCount = _spiCommunication.ReadRegister((byte)DeviceRegister.RXBYTES); //reads the number of bytes in RXFIFO
 
             if ((rxFifoByteCount & 0x7F) != 0 && (rxFifoByteCount & 0x80) == 0) //if bytes in buffer and no RX Overflow
             {
                 buffer = _spiCommunication.ReadBurst((byte)DeviceRegister.RXFIFO_BURST, rxFifoByteCount);
-                return true;
+                result.Success = true;
+                result.Value = buffer;
+                return result;
             }
-            
+
             Powerstate.Idle();
             _spiCommunication.WriteStrobe(CommandStrobe.SFRX);
-            Thread.Sleep(50);
+            await Task.Delay(50, cancellationToken);
             _rxTxStateController.Receive();
-            return false;
+            return result;
         }
-        
-        public bool GetPayload(out RFPacket? packet)
+
+        public CommunicationResult<RFPacket> GetPayload()
         {
-            packet = null;
-            
-            if (TryRxPayloadBurst(out var rxBuffer) == false || CheckAcknowledge(rxBuffer[2], rxBuffer, out var _))
-                return false;
+            var result = new CommunicationResult<RFPacket>();
 
-            var receiver = rxBuffer[2];
+            var rxPayloadBurst = TryRxPayloadBurst();
 
-            var packetLength = rxBuffer[0];
-            var rssiDbm = ReceiverStrengthToDBM(rxBuffer[packetLength+1]);
-            var lqi = LqiConvert((sbyte)rxBuffer[packetLength+2]);
+            if (!rxPayloadBurst.Success || CheckAcknowledge(rxPayloadBurst.Value[2], rxPayloadBurst.Value, out var _))
+                return result;
+
+            var receiver = rxPayloadBurst.Value[2];
+
+            var packetLength = rxPayloadBurst.Value[0];
+            var rssiDbm = ReceiverStrengthToDBM(rxPayloadBurst.Value[packetLength + 1]);
+            var lqi = LqiConvert((sbyte)rxPayloadBurst.Value[packetLength + 2]);
             var crc = CheckCRC(lqi);
-            packet = new RFPacket(receiver, rssiDbm, lqi, crc, rxBuffer);
-            
+            result.Success = true;
+            result.Value = new RFPacket(receiver, rssiDbm, lqi, crc, rxPayloadBurst.Value);
             if (DeviceAddress != (byte)DeviceRegister.BROADCAST_ADDRESS)
                 SendAcknowledge(receiver);
 
-            return true;
+            return result;
         }
 
         #endregion
@@ -411,7 +595,7 @@ namespace CC1101.NET.Internal
             if (!gpioController.IsPinOpen(connectionConfiguration.CS))
                 gpioController.OpenPin(connectionConfiguration.CS, PinMode.Output);
         }
-        
+
         #endregion
     }
 

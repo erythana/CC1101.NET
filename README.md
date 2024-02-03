@@ -13,8 +13,7 @@ SPI-Interface</a> on your RPi.<br />
 
 ## Wiring
 
-Please refer to the <a href="https://www.raspberrypi.com/documentation/computers/raspberry-pi.html">Raspberry Pi
-Documentation<a/> for the GPIO Header scheme
+Please refer to the <a href="https://www.raspberrypi.com/documentation/computers/raspberry-pi.html">Raspberry Pi Documentation<a/> for the GPIO Header scheme
 
 The default settings for this library are listed here:
 
@@ -22,35 +21,35 @@ Either use <br />
 ### BUS 00
 | CC1101              | Raspberry Pi |
 |---------------------|--------------|
-| Vdd                 | 3.3V (01)    |
-| SI                  | MOSI (19)    |
-| SO                  | MISO (21)    |
-| CS                  | SS   (24)    |
-| SCLK                | SCK  (23)    |
-| GDO2                | GPIO (22)    |
-| GDO0                | not used     |
-| GND                 | GND (25)     |
+| Vdd                 | 3.3V (01)                  |
+| SI                  | MOSI (19) - GPIO10         |
+| SO                  | MISO (21) - GPIO09         |
+| CS                  | CEO  (24) - GPIO08         |
+| SCLK                | SCK  (23) - GPIO11         |
+| GDO2                | GPIO (22) - GPIO25         |
+| GDO0                | not used                   |
+| GND                 | GND  (25)                  |
 
 OR
 
 ### BUS 01
 | CC1101              | Raspberry Pi |
 |---------------------|--------------|
-| Vdd                 | 3.3V (17)    |
-| SI                  | MOSI (38)    |
-| SO                  | MISO (35)    |
-| CS                  | SS   (36)    |
-| SCLK                | SCK  (40)    |
-| GDO2                | GPIO (22)    |
-| GDO0                | not used     |
-| GND                 | GND (34)     |
+| Vdd                 | 3.3V (17)            |
+| SI                  | MOSI (38) - GPIO20   |
+| SO                  | MISO (35) - GPIO19   |
+| CS                  | CEO  (12) - GPIO18   |
+| SCLK                | SCK  (40) - GPIO21   |
+| GDO2                | GPIO (22) - GPIO25   |
+| GDO0                | not used             |
+| GND                 | GND (34)             |
 
 OR
 
 ### Custom BUS
 
 If you really need to, you can also supply your own ConnectionConfiguration when instantiating the CC1101 library.<br />
-Make sure the configured PIN supports the specific SPI operation.
+Make sure the configured PIN supports the specific SPI operation (see <a href="https://www.raspberrypi.com/documentation/computers/raspberry-pi.html">Raspberry Pi Documentation<a/>) for predefined buses.
 Read up on Device Trees and the <a href="https://github.com/raspberrypi/documentation/blob/develop/documentation/asciidoc/computers/raspberry-pi/spi-bus-on-raspberry-pi.adoc">Raspberry SPI</a><br />
 
 | CC1101                            |
@@ -63,14 +62,15 @@ Read up on Device Trees and the <a href="https://github.com/raspberrypi/document
 
 ## Usage
 Instantiate a new 'CC1101Controller', if you go with the default configuration (Bus 00, see 'Wiring' for more details ) you don't need to specify anything.<br />
-If you want to choose a different Bus, you can create supply a 'ConnectionConfiguration' with your settings.<br />
+If you want to choose a different Bus, you can create supply a 'ConnectionConfiguration' with your own settings.<br />
+When doing so, you need to specify the logical Pin number, not the physical Pin from the header.
 <br />
 After creating the controller, you have to call "Init" and initially set a DeviceAddress (whatever you like).<br />
 This method returns a CC1101 object which allows you to talk with your CC1101 module.
 
 Example:
 ```c#
-var controller = new CC1101Controller(null);
+var controller = new CC1101Controller();
 var cc1101 = controller.Initialize(0x03);
 ```
 
